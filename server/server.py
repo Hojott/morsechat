@@ -1,5 +1,6 @@
-import socket
-import threading
+import time
+import socket, threading
+from connection import Connection
 
 class Server():
 
@@ -8,6 +9,7 @@ class Server():
         self._port = port
 
         self._users: list = []
+        self._messages: list = []
 
     def create_socket(self):
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -25,22 +27,44 @@ class Server():
     def listen(self):
         while True:
             conn, addr = self.sock.accept()
-            self.users.append(addr)
-            with conn:
-                print(f"Connection received: {addr}")
-                self.create_thread(conn)
+            registered = False
+            for user, id in reversed(self.users):
+                if addr == user.addr:
+                    registered = True
+                    print(f"Connection from {addr} as {id}")
+                    user_conn: Connection = user
+                    break
 
-    def create_thread(self, conn: socket.socket):
-        thread = threading.Thread(target=self.transmitter, args=(conn,))
+            if not registered:
+                id = len(self.users) # len nicely outputs the next available id
+                user_conn = Connection(id, conn, addr)
+                self.users.append(user_conn)
+                print(f"New connection from {addr} as {id}")
+
+            self.create_thread(user_conn)
+
+    def create_thread(self, conn: Connection):
+        thread = threading.Thread(target=self.conn_listener, args=(conn,), name=conn.id)
         thread.start()
 
-    def transmitter(self, conn: socket.socket):
+    def conn_listener(self, conn: Connection):
         while True:
-            message = conn.recv(1024)
+            self.transmit_unread(conn)
+
+            message = conn.receive()
             if not message:
-                self.users.remove(conn.getpeername())
                 break
-            conn.sendall(message)
+            self.messages.append(message)
+
+    def transmit_unread(self, conn: Connection):
+        for message in reversed(self.messages):
+            message_timestamp: float = message[1]
+
+            if conn.lastseen < message_timestamp:
+                conn.unread[:0] = [message]
+
+        conn.transmit_unread()
+        conn.lastseen = time.time()
 
     def __enter__(self):
         self.create_socket()
@@ -60,6 +84,10 @@ class Server():
     @property
     def users(self) -> list:
         return self._users
+
+    @property
+    def messages(self) -> list:
+        return self._messages
 
     @property
     def sock(self) -> socket.socket:
